@@ -1,0 +1,55 @@
+# Import libraries:
+
+from keras.preprocessing import image
+import keras.backend as K
+from keras.models import load_model
+import numpy as np
+import cv2
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+
+#
+path = ".../pcb/DeepPCB-master/data/test/no defect/50600017_temp"
+def load_image(path):
+	img = image.load_img(path, target_size=(200, 200))
+	img = image.img_to_array(img)
+	img = np.expand_dims(img, axis=0)
+	img = img/255
+	return img
+
+model = load_model("PCB_model.h5")
+img = load_image(path)
+preds = model.predict(img)
+print(preds)
+
+class_idx = np.argmax(preds[0])
+class_output = model.output[:, class_idx]
+last_conv_layer = model.get_layer("conv_pw_13_relu")
+
+# Get values of pooled grads and model conv. layer output as Numpy arrays 
+
+grads = K.gradients(class_output, last_conv_layer.output)[0]
+pooled_grads = K.mean(grads, axis=(0, 1, 2))
+iterate = K.function([model.input], [pooled_grads, last_conv_layer.output[0]])
+pooled_grads_value, conv_layer_output_value = iterate([img])
+
+# Multiply each channel in the feature-map array by "how important it is"
+
+for i in range(512):
+    conv_layer_output_value[:, :, i] *= pooled_grads_value[i]
+
+# Channel-wise mean of resulting feature-map is the heatmap of class activation
+
+heatmap = np.mean(conv_layer_output_value, axis=-1)
+heatmap = np.maximum(heatmap, 0)
+heatmap /= np.max(heatmap)
+
+img = cv2.imread(path)
+heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+heatmap = np.uint8(255 * heatmap)
+heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+superimposed_img = cv2.addWeighted(img, 0.6, heatmap, 0.4, 0)
+cv2.imwrite("superimposed_img.png", superimposed_img)
+
+plt.imshow(superimposed_img)
